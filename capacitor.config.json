@@ -1,0 +1,9 @@
+{
+  "appId": "com.puredial.suite",
+  "appName": "PureSuite",
+  "webDir": "dist/app/browser",
+  "bundledWebRuntime": false,
+  "server": {
+    "androidScheme": "https"
+  }
+}

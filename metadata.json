@@ -1,0 +1,6 @@
+{
+  "name": "Android Phone UI",
+  "description": "A native Android-style calling application interface with phone, contacts, and favourites screens.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

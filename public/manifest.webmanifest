@@ -1,0 +1,19 @@
+{
+  "id": "/",
+  "name": "PureSuite — Default Phone, SMS & Contacts (Offline)",
+  "short_name": "PureSuite",
+  "description": "100% Offline 3-in-1 Default Caller, Default SMS & Default Contacts APK Suite with Anti-Bomber & 13 Themes.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#111827",
+  "theme_color": "#16a34a",
+  "icons": [
+    {
+      "src": "/favicon.ico",
+      "sizes": "64x64 32x32 24x24 16x16",
+      "type": "image/x-icon",
+      "purpose": "any"
+    }
+  ]
+}

@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Android Phone UI</title>
+    <base href="/" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="A native Android-style calling application interface with phone, contacts, and favourites screens." />
+    <meta property="og:title" content="Android Phone UI" />
+    <meta property="og:description" content="A native Android-style calling application interface with phone, contacts, and favourites screens." />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="theme-color" content="#16a34a" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="icon" type="image/x-icon" href="favicon.ico" />
+  </head>
+  <body>
+    <app-root></app-root>
+    <script>
+      if ('caches' in window) {
+        caches.keys().then((keys) => {
+          let hadLegacy = false;
+          Promise.all(
+            keys.map((k) => {
+              if (k !== 'puresuite-offline-v12') {
+                hadLegacy = true;
+                return caches.delete(k);
+              }
+              return Promise.resolve();
+            })
+          ).then(() => {
+            if (hadLegacy && !sessionStorage.getItem('puresuite_v12_reloaded')) {
+              sessionStorage.setItem('puresuite_v12_reloaded', '1');
+              window.location.reload();
+            }
+          });
+        }).catch(() => {});
+      }
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.addEventListener('message', (event) => {
+          if (event.data && event.data.type === 'PURGED_OLD_CACHE_RELOAD') {
+            if (!sessionStorage.getItem('puresuite_v12_reloaded')) {
+              sessionStorage.setItem('puresuite_v12_reloaded', '1');
+              window.location.reload();
+            }
+          }
+        });
+        window.addEventListener('load', () => {
+          navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' }).then((reg) => {
+            reg.update().catch(() => {});
+          }).catch(() => {});
+        });
+      }
+    </script>
+  </body>
+</html>
