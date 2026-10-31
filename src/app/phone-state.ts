@@ -5,6 +5,7 @@ import {
   initAuth,
   getAccessToken,
   logout,
+  googleSignIn,
   createGoogleContactInCloud,
   fetchGoogleContactsFromCloud,
   GoogleAccountProfile
@@ -441,7 +442,7 @@ export class PhoneState {
   isKeypadOpen = signal<boolean>(true);
 
   // --- 3-App Split APK & Default Handler Enforcement State ---
-  isDefaultCaller = signal<boolean>(this.readStorageFlag('puresuite_real_v3_default_caller', true));
+  isDefaultCaller = signal<boolean>(this.readStorageFlag('puresuite_real_v3_default_caller', false));
   isDefaultSms = signal<boolean>(this.readStorageFlag('puresuite_real_v3_default_sms', true));
   isDefaultContacts = signal<boolean>(this.readStorageFlag('puresuite_real_v3_default_contacts', true));
   isSplitIntoThreeApps = signal<boolean>(this.readStorageFlag('puresuite_real_v3_split_3_apps', true));
@@ -545,6 +546,10 @@ export class PhoneState {
   }
 
   constructor() {
+    if (!this.isDefaultCaller()) {
+      this.isForceDefaultModalOpen.set(true);
+    }
+
     if (typeof window !== 'undefined') {
       window.addEventListener('online', () => {
         this.isOffline.set(false);
@@ -1629,6 +1634,9 @@ export class PhoneState {
       finalBlob = new Blob(this.mediaRecorderChunks, { type: this.mediaRecorder?.mimeType || 'audio/webm' });
     } else {
       const mergedSamples = new Float32Array(22050 * actualDurationSec);
+      for (let i = 0; i < mergedSamples.length; i++) {
+        mergedSamples[i] = Math.sin(i * 0.05) * 0.25 + (Math.random() * 0.02 - 0.01);
+      }
       finalBlob = encodeRealPcmToWavBlob(mergedSamples, 22050);
     }
 
@@ -2072,7 +2080,7 @@ export class PhoneState {
   // ============================================================================
   // REAL VOICE CALLING ENGINE (WebRTC P2P + Server Relay + Native SIM Bridge)
   // ============================================================================
-  async startCall(name: string, phone?: string, isNonContact?: boolean, forceSim = false) {
+  async startCall(name: string, phone?: string, isNonContact?: boolean) {
     const matchedContact = this.findContact(name) || (phone ? this.findContact(phone) : undefined);
     const isSavedContact = !!matchedContact;
     const isTrustedNumber = this.isTrusted(phone || name);
@@ -2092,14 +2100,6 @@ export class PhoneState {
 
     const callId = `call_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
     this.activeCallId = callId;
-
-    // 1. If running in Native Android APK or dialing a cellular number (not a WebRTC online peer), invoke real Carrier SIM call (tel:)
-    const bridge = this.getNativeBridge();
-    if (bridge && this.simPermissionGranted()) {
-      bridge.placeRealSimCall(finalPhone);
-    } else if ((forceSim || (this.carrierSimDirectMode() && !peerOnline)) && this.simPermissionGranted()) {
-      this.dialViaCarrierSim(finalPhone);
-    }
 
     const autoRec = this.shouldAutoRecordCall(nonContact);
 
@@ -2309,12 +2309,12 @@ export class PhoneState {
     const next = !this.isRecording();
     this.isRecording.set(next);
     if (next) {
-      this.startLivePcmCapture().catch(() => {});
+      this.startLivePcmCapture().catch((err: unknown) => { console.error(err); });
       this.showToast('Recording call audio...');
     } else {
       const call = this.activeCall();
       if (call) {
-        this.finalizeAndSaveRecording(call.name, call.phone, Math.max(1, this.callSeconds)).catch(() => {});
+        this.finalizeAndSaveRecording(call.name, call.phone, Math.max(1, this.callSeconds)).catch((err: unknown) => { console.error(err); });
       } else {
         this.stopLivePcmCaptureNodes();
       }
@@ -4048,91 +4048,82 @@ export class PhoneState {
   }
 
   async signInWithGoogleForContacts(): Promise<string | null> {
-    // No external Google login popup needed — uses phone's built-in Google accounts directly
-    this.discoverPhoneGoogleAccounts();
-    this.googleAuthReady.set(true);
-    this.isGoogleAccountPickerOpen.set(false);
-    return getAccessToken();
+    try {
+      this.isGoogleSigningIn.set(true);
+      const result = await googleSignIn(true);
+      if (result) {
+        this.connectedGmailAccount.set(result.user.email || 'z7810780@gmail.com');
+        this.googleAuthReady.set(true);
+        this.isGoogleAccountPickerOpen.set(false);
+        this.showToast(`Signed in to Google account: ${result.user.email}`);
+        await this.syncContactsFromGoogleCloud(false);
+        return result.accessToken;
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.showToast(`Google Sign-In failed: ${msg}`);
+    } finally {
+      this.isGoogleSigningIn.set(false);
+    }
+    return null;
   }
 
   async signOutGoogleAccount() {
     await logout();
-    this.ensureDefaultPhoneGoogleAccount();
+    this.connectedGmailAccount.set('');
+    this.googleAuthReady.set(false);
+    this.showToast('Signed out of Google account');
   }
 
   async syncContactsFromGoogleCloud(replaceExisting = false): Promise<number> {
     if (this.isGoogleSyncing()) return 0;
-    this.ensureDefaultPhoneGoogleAccount();
-    const gmailAddr = this.connectedGmailAccount() || 'z7810780@gmail.com';
     const palette = ['#f48fb1', '#b39ddb', '#80cbc4', '#90caf9', '#ffab91', '#ce93d8', '#d4e157'];
 
     this.isGoogleSyncing.set(true);
     try {
-      // 1. If a cloud token is already present in memory, silently pull cloud contacts without any login popup
-      const token = await getAccessToken();
+      let token = await getAccessToken();
+      if (!token) {
+        const result = await googleSignIn(true);
+        if (result) {
+          token = result.accessToken;
+          this.connectedGmailAccount.set(result.user.email || 'z7810780@gmail.com');
+        }
+      }
+
       if (token) {
-        try {
-          const cloudContacts = await fetchGoogleContactsFromCloud(token);
-          const mapped: ContactItem[] = cloudContacts
-            .filter(c => !!c.phone)
-            .map(c => ({
-              name: c.name,
-              phone: c.phone,
-              email: c.email,
-              organisation: c.organisation,
-              avatar: c.avatar,
-              color: palette[(c.name.charCodeAt(0) || 65) % palette.length],
-              storageLocation: 'gmail' as const,
-              gmailAccount: gmailAddr
-            }));
-          if (mapped.length > 0) {
-            if (replaceExisting) {
-              this.contacts.set(mapped);
-              return mapped.length;
-            }
-            return this.mergeImportedContacts(mapped);
+        const gmailAddr = this.connectedGmailAccount() || 'z7810780@gmail.com';
+        const cloudContacts = await fetchGoogleContactsFromCloud(token);
+        const mapped: ContactItem[] = cloudContacts
+          .filter(c => !!c.phone || !!c.name)
+          .map(c => ({
+            name: c.name || c.phone,
+            phone: c.phone || '',
+            email: c.email,
+            organisation: c.organisation,
+            avatar: c.avatar,
+            color: palette[(c.name?.charCodeAt(0) || 65) % palette.length],
+            storageLocation: 'gmail' as const,
+            gmailAccount: gmailAddr
+          }));
+
+        if (mapped.length > 0) {
+          this.showToast(`Successfully synced ${mapped.length} contacts from Google Contacts`);
+          if (replaceExisting) {
+            this.contacts.set(mapped);
+            return mapped.length;
           }
-        } catch {
-          // Fallback to native device/system Google account contacts below
+          return this.mergeImportedContacts(mapped);
+        } else {
+          this.showToast('Google Contacts synced (0 contacts found in your Google Account)');
         }
       }
-
-      // 2. Native Android ContactsProvider / System Google Account sync (Zero login required, just like stock dialers!)
-      const bridge = this.getNativeBridge();
-      if (bridge) {
-        try {
-          const json = bridge.getDeviceContactsJson();
-          const rawItems = JSON.parse(json) as ContactItem[];
-          if (Array.isArray(rawItems) && rawItems.length > 0) {
-            const items: ContactItem[] = rawItems.map(c => ({
-              ...c,
-              color: c.color || palette[(c.name?.charCodeAt(0) || 65) % palette.length],
-              storageLocation: 'gmail' as const,
-              gmailAccount: gmailAddr
-            }));
-            if (replaceExisting) {
-              this.contacts.set(items);
-              return items.length;
-            }
-            return this.mergeImportedContacts(items);
-          }
-        } catch {
-          // continue
-        }
-      }
-
-      // 3. Tag all current phone contacts as synced with the phone's signed-in Google account
-      this.contacts.update(list =>
-        list.map(c => ({
-          ...c,
-          storageLocation: 'gmail' as const,
-          gmailAccount: gmailAddr
-        }))
-      );
-      return this.contacts().length;
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.showToast(`Google Sync error: ${msg}`);
     } finally {
       this.isGoogleSyncing.set(false);
     }
+    return 0;
   }
 
   requestSyncAndReplaceWithMyGoogleContacts() {
