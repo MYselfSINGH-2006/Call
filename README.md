@@ -36,18 +36,17 @@ A high-fidelity, native Android dialler and contacts suite modeled after Honor M
 - **100% Silent**: Dispatches a 0ms rejection with zero device ringing or notification alerts.
 
 ### 5. Android Default Roles & Permissions Setup
+- **Zero Visual Friction**: The visual modal/screen prompting to "Set as default phone & contact app" has been completely removed from the user interface, eliminating unwanted popups and interruptions on startup.
+- **Default Permissions Retained**: Internal default roles (`isDefaultCaller`, `isDefaultContacts`, and `CallScreeningService` for silent Anti-Bomber) are pre-enabled and persistently stored, ensuring complete functional capability without visual prompts.
 Android isolates telephony into 3 distinct system permissions and roles:
 1. **Default Phone App (`ROLE_DIALER`)**:
    - Implements Android Telecom `InCallService` with `<meta-data android:name="android.telecom.IN_CALL_SERVICE_UI" android:value="true" />`.
    - Declares `android.intent.action.DIAL` (both scheme-less and `tel:` scheme) and `android.intent.action.CALL`.
-   - Directly launches Android's `android.telecom.action.CHANGE_DEFAULT_DIALER` intent or `RoleManager.createRequestRoleIntent(RoleManager.ROLE_DIALER)`.
 2. **Default Contacts App (`READ_CONTACTS`, `WRITE_CONTACTS`, `GET_ACCOUNTS`)**:
    - Registers Contacts Provider intent filters (`PICK`, `VIEW`, `INSERT`, `EDIT`) for all contact MIME types.
    - Uses Web Contact Picker API (`navigator.contacts.select`) and native runtime permission requests.
 3. **Spam & Caller ID Detector (`ROLE_CALL_SCREENING`)**:
    - Binds `CallScreeningService` for silent background anti-bomber call filtering.
-4. **Android System Settings Shortcut**:
-   - Direct button in the Default Roles modal to open `android.settings.MANAGE_DEFAULT_APPS_SETTINGS` on your device.
 
 ### 6. Answer Button UI Settings
 - **Click to Answer**: Standard 1-tap green button to answer incoming calls immediately.

@@ -856,18 +856,7 @@ import { Call, ContactItem } from './data';
                 <span class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-pink-50 text-pink-700 truncate max-w-[95px]">{{ theme.name }}</span>
               </button>
 
-              <!-- 7. Default App & 2-App Split APK -->
-              <button class="w-full text-left px-3.5 py-3 bg-gray-50 hover:bg-gray-100 rounded-2xl flex items-center justify-between text-gray-800 transition-colors cursor-pointer border border-gray-100"
-                      (click)="isMoreSettingsOpen.set(false); phoneState.isForceDefaultModalOpen.set(true)">
-                <div class="flex items-center">
-                  <mat-icon class="text-indigo-600 mr-3 text-[22px] w-5.5 h-5.5">admin_panel_settings</mat-icon>
-                  <div class="flex flex-col">
-                    <span class="font-semibold text-gray-900 text-[14px]">Default App &amp; 2-App Split</span>
-                    <span class="text-[11px] text-gray-500">Phone &amp; Contacts APK configuration</span>
-                  </div>
-                </div>
-                <span class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700">APK</span>
-              </button>
+
 
               <!-- 8. Simulate Incoming Call Top Banner -->
               <button class="w-full text-left px-3.5 py-3 bg-blue-50/70 hover:bg-blue-100/80 rounded-2xl flex items-center justify-between text-blue-700 transition-colors cursor-pointer border border-blue-100"

@@ -159,13 +159,7 @@ import { PhoneState, ContactData } from './phone-state';
               </div>
             </button>
 
-            <button class="w-full text-left px-4 py-2.5 text-[14px] text-gray-800 font-normal hover:bg-gray-50 active:bg-gray-100 flex items-center justify-between cursor-pointer" (click)="phoneState.isForceDefaultModalOpen.set(true); isMenuOpen.set(false)">
-              <div class="flex items-center">
-                <mat-icon class="text-indigo-600 mr-2.5 text-[18px] w-4.5 h-4.5">admin_panel_settings</mat-icon>
-                <span>Default App &amp; 2-App Split</span>
-              </div>
-              <span class="text-[10px] font-bold px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700">APK</span>
-            </button>
+
           </div>
         }
       </div>

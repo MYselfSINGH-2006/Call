@@ -508,7 +508,7 @@ export class PhoneState {
   isKeypadOpen = signal<boolean>(true);
 
   // --- 3-App Split APK & Default Handler Enforcement State ---
-  isDefaultCaller = signal<boolean>(this.readStorageFlag('puresuite_real_v3_default_caller', false));
+  isDefaultCaller = signal<boolean>(this.readStorageFlag('puresuite_real_v3_default_caller', true));
   isDefaultSms = signal<boolean>(this.readStorageFlag('puresuite_real_v3_default_sms', true));
   isDefaultContacts = signal<boolean>(this.readStorageFlag('puresuite_real_v3_default_contacts', true));
   isSplitIntoThreeApps = signal<boolean>(this.readStorageFlag('puresuite_real_v3_split_3_apps', true));
@@ -612,10 +612,6 @@ export class PhoneState {
   }
 
   constructor() {
-    if (!this.isDefaultCaller()) {
-      this.isForceDefaultModalOpen.set(true);
-    }
-
     if (typeof window !== 'undefined') {
       window.addEventListener('online', () => {
         this.isOffline.set(false);
