@@ -189,6 +189,7 @@ Ensure `android/app/src/main/AndroidManifest.xml` includes the necessary permiss
 ```
 
 ### Step 4: Open in Android Studio & Generate APK
+use the logo given for contacts and call dialler 
 ```bash
 npx cap open android
 ```
