@@ -1,7 +1,7 @@
 import { ChangeDetectionStrategy, Component, computed, effect, inject, input, output, signal } from '@angular/core';
 import { MatIconModule } from '@angular/material/icon';
 import QRCode from 'qrcode';
-import { PhoneState, ContactData } from './phone-state';
+import { PhoneState, ContactData, NetworkRejectionReason } from './phone-state';
 
 @Component({
   selector: 'app-contact-details',
@@ -75,6 +75,17 @@ import { PhoneState, ContactData } from './phone-state';
               [style.color]="theme.primaryTextColor">{{ c.name }}</h2>
           @if (c.organisation) {
             <p class="text-[13px] mt-0.5" [style.color]="theme.secondaryTextColor">{{ c.organisation }}</p>
+          }
+
+          <!-- Silent Block Active Indicator Badge -->
+          @if (currentSilentBlockRule(); as rule) {
+            <button type="button"
+                    class="mt-2 inline-flex items-center space-x-1.5 px-3 py-1 rounded-full bg-rose-50 border border-rose-200 text-rose-700 text-[12px] font-semibold cursor-pointer active:scale-95 transition-transform"
+                    (click)="openSilentBlockPicker()">
+              <mat-icon class="text-[14px] w-3.5 h-3.5 text-rose-600">block</mat-icon>
+              <span>Silent Block: {{ rule.protocolReleaseName }}</span>
+              <mat-icon class="text-[14px] w-3.5 h-3.5 text-rose-400">tune</mat-icon>
+            </button>
           }
         </div>
 
@@ -298,10 +309,27 @@ import { PhoneState, ContactData } from './phone-state';
             <span>Share contact number</span>
             <mat-icon class="text-[18px] w-4.5 h-4.5 text-emerald-600">share</mat-icon>
           </button>
+          <!-- Silent Network Rejection (Block with custom network cause) -->
           <button type="button"
-                  class="w-full text-left px-5 py-2.5 text-[15px] hover:bg-black/5 active:bg-black/10 transition-colors cursor-pointer"
-                  (click)="toggleBlock()">
-            {{ isBlocked() ? 'Unblock contact' : 'Block contact' }}
+                  class="w-full text-left px-5 py-2.5 text-[15px] hover:bg-black/5 active:bg-black/10 transition-colors flex items-center justify-between cursor-pointer"
+                  (click)="openSilentBlockPicker()">
+            <div class="flex flex-col min-w-0 pr-1">
+              <span class="font-medium text-gray-900 leading-tight">Silent Network Block</span>
+              <span class="text-[11px] text-gray-500 leading-tight mt-0.5 truncate">
+                {{ currentSilentBlockRule() ? currentSilentBlockRule()!.protocolReleaseName : 'Pick carrier release cause' }}
+              </span>
+            </div>
+            <mat-icon class="text-[18px] w-4.5 h-4.5" [class.text-rose-600]="!!currentSilentBlockRule()" [class.text-gray-400]="!currentSilentBlockRule()">security</mat-icon>
+          </button>
+          <!-- Call Recordings for this contact -->
+          <button type="button"
+                  class="w-full text-left px-5 py-2.5 text-[15px] hover:bg-black/5 active:bg-black/10 transition-colors flex items-center justify-between cursor-pointer"
+                  (click)="isMoreMenuOpen.set(false); openRecordingsRequest.emit()">
+            <div class="flex items-center">
+              <mat-icon class="text-amber-600 mr-2.5 text-[18px] w-4.5 h-4.5">mic</mat-icon>
+              <span>Call recordings</span>
+            </div>
+            <span class="text-[11px] font-bold px-1.5 py-0.5 rounded-full bg-amber-50 text-amber-800">{{ phoneState.recordings().length }}</span>
           </button>
           <button type="button"
                   class="w-full text-left px-5 py-2.5 text-[15px] hover:bg-black/5 active:bg-black/10 transition-colors cursor-pointer"
@@ -646,21 +674,121 @@ import { PhoneState, ContactData } from './phone-state';
           </div>
         </div>
       }
+
+      <!-- SILENT NETWORK REJECTION (PRESELECT NETWORK REASON) MODAL -->
+      @if (isSilentBlockPickerOpen()) {
+        <div class="fixed inset-0 bg-black/60 z-50 flex flex-col justify-end"
+             (click)="isSilentBlockPickerOpen.set(false)"
+             (keyup.enter)="isSilentBlockPickerOpen.set(false)"
+             tabindex="0"
+             role="button"
+             aria-label="Close silent block modal">
+          <div class="bg-white rounded-t-[28px] p-5 shadow-2xl text-gray-900 animate-fade-in max-h-[85vh] overflow-y-auto"
+               (click)="$event.stopPropagation()"
+               (keydown)="$event.stopPropagation()"
+               tabindex="0"
+               role="dialog">
+            <div class="flex items-center justify-between pb-3 border-b border-gray-100">
+              <div class="flex flex-col">
+                <h3 class="text-[18px] font-bold text-gray-900 leading-tight">Silent Network Rejection</h3>
+                <span class="text-[12px] text-gray-500 mt-0.5">Preselect network-level announcement for {{ c.name }}</span>
+              </div>
+              <button type="button"
+                      class="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center text-gray-500 hover:bg-gray-200 cursor-pointer"
+                      (click)="isSilentBlockPickerOpen.set(false)">
+                <mat-icon class="text-[18px] w-4.5 h-4.5">close</mat-icon>
+              </button>
+            </div>
+
+            <!-- Transparency & Verification Technical Notice -->
+            <div class="mt-3 p-3 rounded-2xl bg-amber-50 border border-amber-200/80 text-[11px] text-amber-900 leading-relaxed">
+              <div class="flex items-center font-bold space-x-1.5 text-amber-950 mb-1">
+                <mat-icon class="text-[16px] w-4 h-4 text-amber-600">verified</mat-icon>
+                <span>3GPP Telephony &amp; Network Call Handling</span>
+              </div>
+              Calls from this number are intercepted silently (0 rings, 0 popups, 0 audio playback from device). Rejection causes trigger the mobile operator's genuine network announcement.
+            </div>
+
+            <!-- 4 Preselected Network Rejection Reasons -->
+            <div class="mt-3 space-y-2">
+              @for (reason of reasonsList; track reason) {
+                @let meta = getReasonMeta(reason);
+                @let isSelected = currentSilentBlockRule()?.reason === reason;
+                <button type="button"
+                        class="w-full text-left p-3.5 rounded-2xl border transition-all cursor-pointer flex flex-col relative"
+                        [class.border-[#007dff]]="isSelected"
+                        [class.bg-blue-50/50]="isSelected"
+                        [class.border-gray-200]="!isSelected"
+                        [class.hover:bg-gray-50]="!isSelected"
+                        (click)="selectSilentBlockReason(reason)">
+                  <div class="flex items-center justify-between">
+                    <div class="flex items-center space-x-2">
+                      <span class="w-2.5 h-2.5 rounded-full"
+                            [class.bg-[#007dff]]="isSelected"
+                            [class.bg-gray-300]="!isSelected"></span>
+                      <span class="text-[15px] font-bold text-gray-900">{{ meta.label }}</span>
+                    </div>
+                    <span class="text-[10px] font-bold px-2 py-0.5 rounded-full"
+                          [class.bg-emerald-100]="meta.carrierSupportStatus === 'verified_native'"
+                          [class.text-emerald-800]="meta.carrierSupportStatus === 'verified_native'"
+                          [class.bg-blue-100]="meta.carrierSupportStatus === 'requires_carrier_cfb'"
+                          [class.text-blue-800]="meta.carrierSupportStatus === 'requires_carrier_cfb'">
+                      {{ meta.carrierSupportStatus === 'verified_native' ? 'NATIVE VERIFIED' : 'CARRIER CFB' }}
+                    </span>
+                  </div>
+                  <p class="text-[12px] text-gray-600 mt-1 leading-snug">{{ meta.description }}</p>
+                  <div class="flex items-center space-x-2 mt-2 pt-2 border-t border-gray-100 text-[11px] text-gray-500 font-mono">
+                    <span>Protocol: {{ meta.protocolReleaseName }}</span>
+                    <span>&bull;</span>
+                    <span>SIP: {{ meta.sipCode }}</span>
+                  </div>
+                  <p class="text-[10px] text-gray-500 mt-1 italic leading-tight">{{ meta.carrierExplanation }}</p>
+                </button>
+              }
+            </div>
+
+            <!-- Action buttons -->
+            <div class="mt-4 pt-3 border-t border-gray-100 flex items-center space-x-2">
+              @if (currentSilentBlockRule()) {
+                <button type="button"
+                        class="flex-1 py-2.5 rounded-xl bg-rose-50 text-rose-700 hover:bg-rose-100 font-semibold text-[14px] cursor-pointer"
+                        (click)="removeSilentBlock()">
+                  Unblock Contact
+                </button>
+              }
+              <button type="button"
+                      class="flex-1 py-2.5 rounded-xl bg-gray-100 text-gray-800 hover:bg-gray-200 font-semibold text-[14px] cursor-pointer"
+                      (click)="isSilentBlockPickerOpen.set(false)">
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      }
     </div>
   `
 })
 export class ContactDetailsComponent {
   phoneState = inject(PhoneState);
-  contact = input<ContactData>({ name: 'Contact', phone: '+91 98773 63313', type: 'Mobile' });
+  contact = input<ContactData>({ name: 'Contact', phone: '', type: 'Mobile' });
   closeView = output<void>();
+  openRecordingsRequest = output<void>();
 
   isScrolled = signal(false);
   isMoreMenuOpen = signal(false);
   isQrSheetOpen = signal(false);
   isShareNumberSheetOpen = signal(false);
   isRingtoneModalOpen = signal(false);
+  isSilentBlockPickerOpen = signal(false);
   copiedToast = signal(false);
   qrCodeDataUrl = signal<string>('');
+
+  reasonsList: NetworkRejectionReason[] = ['line_busy', 'unreachable', 'switched_off', 'invalid_number'];
+
+  currentSilentBlockRule = computed(() => {
+    const p = this.resolvedContact().phone;
+    return this.phoneState.getSilentBlockRule(p);
+  });
 
   ringtoneOptions = ['Default', 'Honor Tune', 'Classic Bell', 'Horizon Pulse', 'Silent'];
 
@@ -847,6 +975,27 @@ export class ContactDetailsComponent {
   selectRingtone(tone: string) {
     this.phoneState.updateContactRingtone(this.resolvedContact().name, tone);
     this.isRingtoneModalOpen.set(false);
+  }
+
+  openSilentBlockPicker() {
+    this.isMoreMenuOpen.set(false);
+    this.isSilentBlockPickerOpen.set(true);
+  }
+
+  selectSilentBlockReason(reason: NetworkRejectionReason) {
+    const c = this.resolvedContact();
+    this.phoneState.setSilentBlockRule(c.phone, c.name, reason);
+    this.isSilentBlockPickerOpen.set(false);
+  }
+
+  removeSilentBlock() {
+    const c = this.resolvedContact();
+    this.phoneState.removeSilentBlockRule(c.phone);
+    this.isSilentBlockPickerOpen.set(false);
+  }
+
+  getReasonMeta(reason: NetworkRejectionReason) {
+    return this.phoneState.getRejectionReasonInfo(reason);
   }
 
   deleteThisContact() {

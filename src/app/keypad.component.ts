@@ -675,7 +675,7 @@ import { Call, ContactItem } from './data';
                (keydown)="$event.stopPropagation()">
             <h3 class="text-[22px] font-bold text-white leading-tight">Credits</h3>
             <p class="text-[14px] text-[#9ca3af] mt-1 mb-5">
-              The creator: <span class="text-[#22c55e] font-semibold">MYself_SINGH</span>
+              The creator: <span class="text-[#22c55e] font-semibold">{{ phoneState.myProfile().name || 'Your Custom Android Dialler' }}</span>
             </p>
 
             <div class="flex flex-col space-y-3">
@@ -796,6 +796,19 @@ import { Call, ContactItem } from './data';
                       [class.text-gray-700]="!phoneState.antiBomber()">
                   {{ phoneState.antiBomber() ? 'ON' : 'OFF' }}
                 </span>
+              </button>
+
+              <!-- Custom Network Call Rejection (Silent Block) -->
+              <button class="w-full text-left px-3.5 py-3 bg-gray-50 hover:bg-gray-100 rounded-2xl flex items-center justify-between text-gray-800 transition-colors cursor-pointer border border-gray-100"
+                      (click)="isMoreSettingsOpen.set(false); phoneState.isSilentBlockModalOpen.set(true)">
+                <div class="flex items-center">
+                  <mat-icon class="text-rose-600 mr-3 text-[22px] w-5.5 h-5.5">block</mat-icon>
+                  <div class="flex flex-col">
+                    <span class="font-semibold text-gray-900 text-[14px]">Silent Network Rejection</span>
+                    <span class="text-[11px] text-gray-500">Block numbers with custom network reason</span>
+                  </div>
+                </div>
+                <span class="text-xs bg-rose-100 text-rose-800 px-2.5 py-0.5 rounded-full font-bold">{{ phoneState.silentBlockRules().length }}</span>
               </button>
 
               <!-- 2. Manage Trust List -->

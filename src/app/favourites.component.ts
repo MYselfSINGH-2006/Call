@@ -272,27 +272,28 @@ export class FavouritesComponent {
   selectContact = output<ContactData>();
 
   frequentContactsList = computed(() => {
-    const preferredOrder = [
-      'mom',
-      'Inder Bhaji',
-      'Ravinder',
-      'Naunehal Bhaji',
-      'Inderpal Singh',
-      'Snia D',
-      'Prithvi',
-      'Preeti',
-      'Pinky Aunty',
-      'Jaspal Uncle'
-    ];
     const allContacts = this.phoneState.contacts();
-    const result: ContactData[] = [];
-    for (const name of preferredOrder) {
-      const found = allContacts.find(c => c.name.toLowerCase() === name.toLowerCase());
-      if (found) {
-        result.push(found);
-      }
+    const calls = this.phoneState.calls();
+    if (!calls.length || !allContacts.length) return [];
+
+    // Calculate frequency of calls per contact
+    const countMap = new Map<string, number>();
+    for (const c of calls) {
+      const cleanPhone = (c.phone || '').replace(/\s+/g, '');
+      const key = cleanPhone || c.name.toLowerCase();
+      countMap.set(key, (countMap.get(key) || 0) + (c.count || 1));
     }
-    return result;
+
+    const matched = allContacts.filter(contact => {
+      const clean = contact.phone.replace(/\s+/g, '');
+      return countMap.has(clean) || countMap.has(contact.name.toLowerCase());
+    });
+
+    return matched.sort((a, b) => {
+      const countA = countMap.get(a.phone.replace(/\s+/g, '')) || countMap.get(a.name.toLowerCase()) || 0;
+      const countB = countMap.get(b.phone.replace(/\s+/g, '')) || countMap.get(b.name.toLowerCase()) || 0;
+      return countB - countA;
+    }).slice(0, 8);
   });
 
   availableContactsForFav = computed(() => {

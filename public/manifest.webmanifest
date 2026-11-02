@@ -1,13 +1,41 @@
 {
   "id": "/",
-  "name": "PureSuite — Default Phone, SMS & Contacts (Offline)",
+  "name": "PureSuite — Default Phone & Contacts",
   "short_name": "PureSuite",
-  "description": "100% Offline 3-in-1 Default Caller, Default SMS & Default Contacts APK Suite with Anti-Bomber & 13 Themes.",
+  "description": "Native Default Phone Dialler & Default Contacts App with Silent Anti-Bomber protection and 13 Themes.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
+  "display_override": ["window-controls-overlay", "standalone", "minimal-ui"],
   "background_color": "#111827",
   "theme_color": "#16a34a",
+  "categories": ["utilities", "communication"],
+  "protocol_handlers": [
+    {
+      "protocol": "tel",
+      "url": "/?call=%s"
+    },
+    {
+      "protocol": "web+contact",
+      "url": "/?contact=%s"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Phone Dialler",
+      "short_name": "Phone",
+      "description": "Open default dialler and keypad",
+      "url": "/?tab=phone",
+      "icons": [{ "src": "/favicon.ico", "sizes": "64x64" }]
+    },
+    {
+      "name": "Contacts",
+      "short_name": "Contacts",
+      "description": "Open default contacts address book",
+      "url": "/?tab=contacts",
+      "icons": [{ "src": "/favicon.ico", "sizes": "64x64" }]
+    }
+  ],
   "icons": [
     {
       "src": "/favicon.ico",

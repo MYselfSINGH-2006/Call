@@ -75,6 +75,32 @@ import { PhoneState, ContactData } from './phone-state';
         @if(isMenuOpen()) {
           <div class="fixed inset-0 z-40" (click)="isMenuOpen.set(false)" (keyup.enter)="isMenuOpen.set(false)" tabindex="0" role="button" aria-label="Close menu"></div>
           <div class="absolute right-4 top-12 bg-white rounded-2xl shadow-[0_6px_28px_rgba(0,0,0,0.18)] z-50 w-72 py-2 overflow-hidden border border-gray-100 text-gray-800 animate-fade-in">
+            <!-- Call recordings (Real In-Call & Standalone Audio Recordings) -->
+            <button class="w-full text-left px-4 py-2.5 text-[14px] text-gray-800 font-normal hover:bg-gray-50 active:bg-gray-100 flex items-center justify-between cursor-pointer"
+                    (click)="openRecordingsRequest.emit(); isMenuOpen.set(false)">
+              <div class="flex items-center">
+                <mat-icon class="text-amber-600 mr-2.5 text-[18px] w-4.5 h-4.5">mic</mat-icon>
+                <div class="flex flex-col">
+                  <span class="font-medium text-gray-900">Call recordings</span>
+                  <span class="text-[11px] text-gray-500">Listen, record &amp; manage audio</span>
+                </div>
+              </div>
+              <span class="text-[11px] font-bold px-2 py-0.5 rounded-full bg-amber-50 text-amber-800">{{ phoneState.recordings().length }}</span>
+            </button>
+
+            <!-- Custom Network Call Rejection (Silent Block Rules) -->
+            <button class="w-full text-left px-4 py-2.5 text-[14px] text-gray-800 font-normal hover:bg-gray-50 active:bg-gray-100 flex items-center justify-between cursor-pointer"
+                    (click)="openSilentBlockRequest.emit(); isMenuOpen.set(false)">
+              <div class="flex items-center">
+                <mat-icon class="text-rose-600 mr-2.5 text-[18px] w-4.5 h-4.5">block</mat-icon>
+                <div class="flex flex-col">
+                  <span class="font-medium text-gray-900">Silent Network Rejection</span>
+                  <span class="text-[11px] text-gray-500">Preselect carrier release cause</span>
+                </div>
+              </div>
+              <span class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-rose-50 text-rose-700">{{ phoneState.silentBlockRules().length }}</span>
+            </button>
+
             <!-- Anti-Bomber Shield (Block unknown callers & OTP spam silently) -->
             <button class="w-full text-left px-4 py-2.5 text-[14px] text-gray-800 font-normal hover:bg-gray-50 active:bg-gray-100 flex items-center justify-between cursor-pointer"
                     (click)="phoneState.toggleAntiBomber(); isMenuOpen.set(false)">
@@ -94,6 +120,18 @@ import { PhoneState, ContactData } from './phone-state';
               </span>
             </button>
 
+            <!-- Manage Trust List (Exceptions for courier / gate guard) -->
+            <button class="w-full text-left px-4 py-2.5 text-[14px] text-gray-800 font-normal hover:bg-gray-50 active:bg-gray-100 flex items-center justify-between cursor-pointer"
+                    (click)="phoneState.isTrustListModalOpen.set(true); isMenuOpen.set(false)">
+              <div class="flex items-center">
+                <mat-icon class="text-blue-600 mr-2.5 text-[18px] w-4.5 h-4.5">verified_user</mat-icon>
+                <div class="flex flex-col">
+                  <span class="font-medium text-gray-900">Manage Trust List</span>
+                  <span class="text-[11px] text-gray-500">Allowed numbers &amp; couriers</span>
+                </div>
+              </div>
+            </button>
+
             <!-- Unified Themes & Wallpapers (Applies to All Apps) -->
             <button class="w-full text-left px-4 py-2.5 text-[14px] text-gray-800 font-normal hover:bg-gray-50 active:bg-gray-100 flex items-center justify-between cursor-pointer"
                     (click)="phoneState.openThemeModal(); isMenuOpen.set(false)">
@@ -101,7 +139,7 @@ import { PhoneState, ContactData } from './phone-state';
                 <mat-icon class="text-pink-600 mr-2.5 text-[18px] w-4.5 h-4.5">palette</mat-icon>
                 <div class="flex flex-col">
                   <span class="font-semibold text-gray-900">Wallpapers &amp; Themes</span>
-                  <span class="text-[11px] text-gray-500">12+ Themes across Phone &amp; Contacts</span>
+                  <span class="text-[11px] text-gray-500">Themes across Phone &amp; Contacts</span>
                 </div>
               </div>
               <span class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-pink-50 text-pink-700 truncate max-w-[85px]">{{ theme.name }}</span>
@@ -155,7 +193,7 @@ import { PhoneState, ContactData } from './phone-state';
       <div class="relative flex-1 flex overflow-hidden">
         <div class="flex-1 overflow-y-auto pr-5" id="contacts-scroll-container">
            @if (!searchQuery()) {
-             <!-- Honor Row: My card (MYself_SINGH / My card) -->
+             <!-- Honor Row: My card -->
              <div class="flex items-center px-5 py-3 cursor-pointer hover:bg-black/5 transition-colors"
                   (click)="openMyCardModal()"
                   (keyup.enter)="openMyCardModal()"
@@ -575,6 +613,8 @@ import { PhoneState, ContactData } from './phone-state';
 export class ContactsComponent {
   phoneState = inject(PhoneState);
   openContactDetailsRequest = output<ContactData>();
+  openRecordingsRequest = output<void>();
+  openSilentBlockRequest = output<void>();
   
   isMenuOpen = signal(false);
   showQrCode = signal(false);
@@ -589,8 +629,8 @@ export class ContactsComponent {
 
   constructor() {
     effect(() => {
-      const name = this.myCardName() || 'MYself_SINGH';
-      const phone = this.myCardPhone() || '+91 98765 43210';
+      const name = this.myCardName() || this.phoneState.myProfile().name || 'My Profile';
+      const phone = this.myCardPhone() || this.phoneState.myProfile().phone || '';
       this.generateMyCardQr(name, phone);
     });
   }
@@ -646,27 +686,30 @@ export class ContactsComponent {
   }
 
   async shareMyCardQr() {
+    const prof = this.phoneState.myProfile();
     const c: ContactData = {
-      name: this.myCardName() || 'MYself_SINGH',
-      phone: this.myCardPhone() || '+91 98765 43210',
+      name: this.myCardName() || prof.name || 'My Profile',
+      phone: this.myCardPhone() || prof.phone || '',
       type: 'Mobile'
     };
     await this.phoneState.shareContactQrSystem(c, this.myCardQrDataUrl());
   }
 
   async shareMyCardNumber() {
+    const prof = this.phoneState.myProfile();
     const c: ContactData = {
-      name: this.myCardName() || 'MYself_SINGH',
-      phone: this.myCardPhone() || '+91 98765 43210',
+      name: this.myCardName() || prof.name || 'My Profile',
+      phone: this.myCardPhone() || prof.phone || '',
       type: 'Mobile'
     };
     await this.phoneState.shareContactNumberSystem(c);
   }
 
   exportMyVcf() {
+    const prof = this.phoneState.myProfile();
     this.phoneState.exportContactsAsVcf({
-      name: this.myCardName() || 'MYself_SINGH',
-      phone: this.myCardPhone() || '+91 98765 43210'
+      name: this.myCardName() || prof.name || 'My Profile',
+      phone: this.myCardPhone() || prof.phone || ''
     });
   }
 

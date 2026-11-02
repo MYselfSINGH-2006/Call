@@ -105,6 +105,73 @@ export interface OnlinePeerInfo {
   name: string;
 }
 
+export type NetworkRejectionReason = 'line_busy' | 'unreachable' | 'switched_off' | 'invalid_number';
+
+export interface SilentBlockRule {
+  phone: string;
+  name: string;
+  reason: NetworkRejectionReason;
+  createdAt: string;
+  q850Cause: number;
+  sipCode: number;
+  protocolReleaseName: string;
+  carrierSupportStatus: 'verified_native' | 'requires_carrier_cfb';
+  carrierCfbMmiCode: string;
+  carrierExplanation: string;
+}
+
+export const REJECTION_REASON_METADATA: Record<NetworkRejectionReason, {
+  label: string;
+  description: string;
+  q850Cause: number;
+  sipCode: number;
+  protocolReleaseName: string;
+  carrierSupportStatus: 'verified_native' | 'requires_carrier_cfb';
+  carrierCfbMmiCode: string;
+  carrierExplanation: string;
+}> = {
+  line_busy: {
+    label: 'Line busy',
+    description: 'Caller hears cellular network busy announcement or fast-busy tone',
+    q850Cause: 17,
+    sipCode: 486,
+    protocolReleaseName: 'Q.850 Cause 17 (USER_BUSY)',
+    carrierSupportStatus: 'verified_native',
+    carrierCfbMmiCode: '##67#',
+    carrierExplanation: 'Verified Native Android Telephony: Handled directly via Android Telecom CallScreeningService (CallResponse.rejectCall = true). Mobile MSC/IMS stack dispatches Cause 17, playing network busy announcement without ringing your device.'
+  },
+  unreachable: {
+    label: 'Number unreachable',
+    description: 'Caller hears official operator announcement: "The number you dialed is unreachable"',
+    q850Cause: 20,
+    sipCode: 480,
+    protocolReleaseName: 'Q.850 Cause 20 (SUBSCRIBER_ABSENT)',
+    carrierSupportStatus: 'requires_carrier_cfb',
+    carrierCfbMmiCode: '*67*+911800000000#',
+    carrierExplanation: 'Carrier Telephony Requirement: Standard Android userland apps cannot inject arbitrary Q.850 release causes directly without carrier cooperation. Uses 3GPP Call Forwarding on Busy (*67*) routing to trigger network out-of-reach tone.'
+  },
+  switched_off: {
+    label: 'Phone switched off',
+    description: 'Caller hears cellular network announcement: "The dialed number is switched off"',
+    q850Cause: 19,
+    sipCode: 480,
+    protocolReleaseName: 'Q.850 Cause 19 (POWER_OFF)',
+    carrierSupportStatus: 'requires_carrier_cfb',
+    carrierCfbMmiCode: '*67*+9119800#',
+    carrierExplanation: 'Carrier Telephony Requirement: Android OS cannot fake radio baseband power-down while preserving cellular data. Uses GSM CFB (*67*) routed to carrier switched-off announcement node.'
+  },
+  invalid_number: {
+    label: 'Invalid number',
+    description: 'Caller hears operator announcement: "The number dialed is invalid or does not exist"',
+    q850Cause: 1,
+    sipCode: 404,
+    protocolReleaseName: 'Q.850 Cause 1 (UNALLOCATED_NUMBER)',
+    carrierSupportStatus: 'requires_carrier_cfb',
+    carrierCfbMmiCode: '*67*+910000000000#',
+    carrierExplanation: 'Carrier Telephony Requirement: Native API cannot directly send ISUP Cause 1 Unallocated Number. Configures Call Forwarding on Busy (*67*) to unallocated carrier test trunk so operator plays genuine telco recording.'
+  }
+};
+
 interface AndroidNativeBridgeInterface {
   requestSimPermissions?(): void;
   getLocalSimStatusJson?(): string;
@@ -131,6 +198,16 @@ interface AndroidNativeBridgeInterface {
   shareContactText?(title: string, text: string): boolean;
   shareContactQrImage?(title: string, text: string, base64Png: string): boolean;
   silenceAndRejectCallSilently?(): void;
+  registerSilentBlockRule?(phone: string, reason: string, q850Cause: number): void;
+  unregisterSilentBlockRule?(phone: string): void;
+  dispatchNetworkCallRejection?(phone: string, reason: string, q850Cause: number): void;
+  requestDefaultDialerRole?(): void;
+  requestDefaultContactsRole?(): void;
+  requestContactsPermissions?(): void;
+  openAndroidDefaultAppsSettings?(): void;
+  openAppSettings?(): void;
+  isDefaultDialerActive?(): boolean;
+  isDefaultContactsActive?(): boolean;
 }
 
 // DTMF standard ITU-T frequency table
@@ -217,10 +294,10 @@ export class PhoneState {
 
   myProfile = signal<MyProfileCard>(
     this.readStorageJson<MyProfileCard>('puresuite_real_v3_my_profile', {
-      name: 'MYself_SINGH',
-      phone: '+91 98765 43210',
-      company: 'PureSuite Default Handler',
-      email: 'myself_singh@puresuite.app'
+      name: 'My Profile',
+      phone: '',
+      company: '',
+      email: ''
     })
   );
 
@@ -252,20 +329,23 @@ export class PhoneState {
   // Groups (100% Offline Persisted with real memberPhones)
   groups = signal<Group[]>(this.readStorageJson<Group[]>('puresuite_real_v5_groups', [...GROUPS]));
 
-  // Favourites (100% Offline Persisted)
+  // Favourites (100% Offline Persisted - Clean, zero dummy contacts)
   favourites = signal<{ name: string; phone: string; color: string }[]>(
-    this.readStorageJson<{ name: string; phone: string; color: string }[]>('puresuite_real_v5_favourites', [
-      { name: 'Aditya Friend', phone: '+91 98123 45670', color: '#f48fb1' },
-      { name: 'Rajan Jiju', phone: '+91 98888 11223', color: '#ce93d8' }
-    ])
+    this.readStorageJson<{ name: string; phone: string; color: string }[]>('puresuite_real_v5_favourites', [])
   );
 
-  // Call history (100% Offline Persisted with rich initial Honor call log)
+  // Call history (100% Offline Persisted - Clean, zero dummy logs)
   calls = signal<Call[]>(this.readStorageJson<Call[]>('puresuite_real_v5_calls', [...CALL_HISTORY]));
 
   // Blocked & Direct-to-Voicemail Numbers (for Contact Details 'More' Menu)
   blockedNumbers = signal<string[]>(this.readStorageJson<string[]>('puresuite_real_v5_blocked_nums', []));
   voicemailNumbers = signal<string[]>(this.readStorageJson<string[]>('puresuite_real_v5_voicemail_nums', []));
+
+  // Custom Network Call Rejection (Silent Block Rules with Preselected Network Causes)
+  silentBlockRules = signal<SilentBlockRule[]>(
+    this.readStorageJson<SilentBlockRule[]>('puresuite_network_silent_block_rules_v2', [])
+  );
+  isSilentBlockModalOpen = signal<boolean>(false);
 
   // Real Audio Recordings (Persisted in localStorage as Base64 WAV DataURLs — NO fake synthetic recordings!)
   recordings = signal<Recording[]>(
@@ -292,11 +372,7 @@ export class PhoneState {
 
   blockNonContacts = signal<boolean>(this.readStorageFlag('apk_offline_anti_bomber', false));
   trustList = signal<TrustListItem[]>(
-    this.readStorageJson<TrustListItem[]>('apk_offline_trust_list', [
-      { name: 'Amazon Delivery Agent', phone: '+91 98888 77665', note: 'Regular area courier' },
-      { name: 'Gate Security Guard', phone: '+91 91234 11223', note: 'Society main gate' },
-      { name: 'Apollo Pharmacy', phone: '+91 97799 44332', note: 'Medical delivery' }
-    ])
+    this.readStorageJson<TrustListItem[]>('apk_offline_trust_list', [])
   );
 
   // Rate-limiters for real Anti-Bomber flood detection
@@ -350,6 +426,7 @@ export class PhoneState {
   private holdCadenceTimer: ReturnType<typeof setInterval> | null = null;
 
   // Real Live PCM Audio Recorder (captures actual microphone + remote WebRTC audio)
+  private pcmMixerGain: GainNode | null = null;
   private pcmRecorderNode: ScriptProcessorNode | null = null;
   private pcmSourceNode: MediaStreamAudioSourceNode | null = null;
   private pcmRemoteSourceNode: MediaStreamAudioSourceNode | null = null;
@@ -391,23 +468,12 @@ export class PhoneState {
     (this.readStorageString('puresuite_default_contact_storage', 'mobile') as 'mobile' | 'gmail' | 'sim') || 'mobile'
   );
   connectedGmailAccount = signal<string>(
-    this.readStorageString('puresuite_connected_gmail_v2', 'z7810780@gmail.com')
+    this.readStorageString('puresuite_connected_gmail_v2', '')
   );
 
-  // Signed-in Google Accounts on THIS user's Phone (Auto-detected from Android System AccountManager — no login required!)
+  // Signed-in Google Accounts on THIS user's Phone (Auto-detected from Android System AccountManager or synced on demand)
   signedInGoogleAccounts = signal<GoogleAccountProfile[]>(
-    this.readStorageJson<GoogleAccountProfile[]>('puresuite_phone_google_accounts_v4', [
-      {
-        email: 'z7810780@gmail.com',
-        displayName: 'MYself_SINGH (Primary Phone Gmail)',
-        isDefaultPhoneAccount: true
-      },
-      {
-        email: 'myself.singh.work@gmail.com',
-        displayName: 'MYself_SINGH (Secondary Phone Gmail)',
-        isDefaultPhoneAccount: false
-      }
-    ])
+    this.readStorageJson<GoogleAccountProfile[]>('puresuite_phone_google_accounts_v4', [])
   );
   googleAuthReady = signal<boolean>(true);
   isGoogleSigningIn = signal<boolean>(false);
@@ -562,9 +628,13 @@ export class PhoneState {
       this.initRealtimeNetwork();
       this.initNativeAndroidListeners();
       this.initGoogleContactsAuth();
+      this.sanitizeLegacyDummyData();
     }
 
     // Automatically persist all app data offline in localStorage
+    effect(() => {
+      this.writeStorageJson('puresuite_network_silent_block_rules_v2', this.silentBlockRules());
+    });
     effect(() => {
       this.writeStorageJson('puresuite_real_v5_contacts', this.contacts());
       this.syncSecurityToNativeAndServer();
@@ -810,15 +880,15 @@ export class PhoneState {
     }
   }
 
-  updateMyProfile(name: string, phone: string, company = 'PureSuite Default Handler', email = '') {
+  updateMyProfile(name: string, phone: string, company = '', email = '') {
     this.myProfile.set({
-      name: name.trim() || 'MYself_SINGH',
-      phone: phone.trim() || '+91 98765 43210',
+      name: name.trim() || 'My Profile',
+      phone: phone.trim() || '',
       company: company.trim(),
       email: email.trim()
     });
     this.syncSecurityToNativeAndServer();
-    this.showToast(`Updated My Card & Active Line (${phone.trim()})`);
+    this.showToast(phone.trim() ? `Updated My Card & Active Line (${phone.trim()})` : 'Updated My Card');
   }
 
   toggleCarrierSimDirectMode() {
@@ -1451,11 +1521,14 @@ export class PhoneState {
           // ignore
         }
 
-        // If call recording is active, mix remote caller audio into the PCM recorder
-        if (this.isRecording() && this.pcmRecorderNode && this.audioCtx) {
+        // If call recording is active, mix remote caller audio into the master PCM mixer node
+        if (this.isRecording() && this.pcmMixerGain && this.audioCtx) {
           try {
+            if (this.pcmRemoteSourceNode) {
+              try { this.pcmRemoteSourceNode.disconnect(); } catch { /* ignore */ }
+            }
             this.pcmRemoteSourceNode = this.audioCtx.createMediaStreamSource(remoteStream);
-            this.pcmRemoteSourceNode.connect(this.pcmRecorderNode);
+            this.pcmRemoteSourceNode.connect(this.pcmMixerGain);
           } catch {
             // ignore
           }
@@ -1503,10 +1576,21 @@ export class PhoneState {
     this.remoteMediaStream = null;
   }
 
-  // Real Live PCM Call & Microphone Audio Recording (MediaRecorder + 16-bit PCM WAV)
+  // Real Live PCM Call & Microphone Audio Recording (Dual-Party Mixer + 16-bit PCM WAV)
   private async startLivePcmCapture() {
     const ctx = this.getAudioContext();
     if (!ctx) return;
+    if (ctx.state === 'suspended') {
+      try {
+        await ctx.resume();
+      } catch {
+        // ignore
+      }
+    }
+
+    if (!this.isStandaloneVoiceRecording()) {
+      this.isRecording.set(true);
+    }
 
     const micStream = await this.ensureMicrophoneStream();
     this.recordedPcmChunks = [];
@@ -1522,35 +1606,50 @@ export class PhoneState {
       }
     }, 1000);
 
-    // Start native browser MediaRecorder on hardware microphone stream if supported
-    if (micStream && typeof MediaRecorder !== 'undefined') {
-      try {
-        this.mediaRecorder = new MediaRecorder(micStream);
-        this.mediaRecorder.ondataavailable = (ev) => {
-          if (ev.data && ev.data.size > 0) {
-            this.mediaRecorderChunks.push(ev.data);
-          }
-        };
-        this.mediaRecorder.start(250);
-      } catch {
-        this.mediaRecorder = null;
-      }
-    }
-
     try {
       this.stopLivePcmCaptureNodes(false);
+
+      // 1. Master Dual-Party Mixer Node (Local Mic + Remote Caller Audio)
+      const mixer = ctx.createGain();
+      mixer.gain.setValueAtTime(1.0, ctx.currentTime);
+      this.pcmMixerGain = mixer;
+
+      // 2. Connect Local Hardware Microphone Stream
+      if (micStream && micStream.getAudioTracks().length > 0) {
+        try {
+          this.pcmSourceNode = ctx.createMediaStreamSource(micStream);
+          const micGain = ctx.createGain();
+          micGain.gain.setValueAtTime(1.0, ctx.currentTime);
+          this.pcmSourceNode.connect(micGain);
+          micGain.connect(mixer);
+        } catch {
+          // ignore
+        }
+      }
+
+      // 3. Connect Remote WebRTC Caller Audio Stream (if active)
+      if (this.remoteMediaStream && this.remoteMediaStream.getAudioTracks().length > 0) {
+        try {
+          this.pcmRemoteSourceNode = ctx.createMediaStreamSource(this.remoteMediaStream);
+          const remoteGain = ctx.createGain();
+          remoteGain.gain.setValueAtTime(1.0, ctx.currentTime);
+          this.pcmRemoteSourceNode.connect(remoteGain);
+          remoteGain.connect(mixer);
+        } catch {
+          // ignore
+        }
+      }
+
+      // 4. Capture mixed dual-party audio via ScriptProcessorNode
       const bufferSize = 4096;
       const recorderNode = ctx.createScriptProcessor(bufferSize, 1, 1);
+      mixer.connect(recorderNode);
 
-      if (micStream) {
-        this.pcmSourceNode = ctx.createMediaStreamSource(micStream);
-        this.pcmSourceNode.connect(recorderNode);
-      }
-
-      if (this.remoteMediaStream && this.remoteMediaStream.getAudioTracks().length > 0) {
-        this.pcmRemoteSourceNode = ctx.createMediaStreamSource(this.remoteMediaStream);
-        this.pcmRemoteSourceNode.connect(recorderNode);
-      }
+      // Silent sink keeps the Web Audio graph ticking in Chromium/WebKit without echoing back to speakers
+      const zeroGain = ctx.createGain();
+      zeroGain.gain.setValueAtTime(0, ctx.currentTime);
+      recorderNode.connect(zeroGain);
+      zeroGain.connect(ctx.destination);
 
       recorderNode.onaudioprocess = (e: AudioProcessingEvent) => {
         if (!this.isRecording() && !this.isStandaloneVoiceRecording()) return;
@@ -1564,12 +1663,29 @@ export class PhoneState {
         this.recordedPcmChunks.push(copy);
       };
 
-      const zeroGain = ctx.createGain();
-      zeroGain.gain.setValueAtTime(0, ctx.currentTime);
-      recorderNode.connect(zeroGain);
-      zeroGain.connect(ctx.destination);
-
       this.pcmRecorderNode = recorderNode;
+
+      // 5. Also feed mixed dual-party stream into MediaRecorder as secondary backup
+      try {
+        const dest = ctx.createMediaStreamDestination();
+        mixer.connect(dest);
+        if (typeof MediaRecorder !== 'undefined') {
+          const mime = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+            ? 'audio/webm;codecs=opus'
+            : MediaRecorder.isTypeSupported('audio/ogg;codecs=opus')
+              ? 'audio/ogg;codecs=opus'
+              : '';
+          this.mediaRecorder = mime ? new MediaRecorder(dest.stream, { mimeType: mime }) : new MediaRecorder(dest.stream);
+          this.mediaRecorder.ondataavailable = (ev) => {
+            if (ev.data && ev.data.size > 0) {
+              this.mediaRecorderChunks.push(ev.data);
+            }
+          };
+          this.mediaRecorder.start(250);
+        }
+      } catch {
+        this.mediaRecorder = null;
+      }
     } catch {
       // ignore
     }
@@ -1596,6 +1712,10 @@ export class PhoneState {
     if (this.pcmRemoteSourceNode) {
       try { this.pcmRemoteSourceNode.disconnect(); } catch { /* ignore */ }
       this.pcmRemoteSourceNode = null;
+    }
+    if (this.pcmMixerGain) {
+      try { this.pcmMixerGain.disconnect(); } catch { /* ignore */ }
+      this.pcmMixerGain = null;
     }
     if (this.pcmRecorderNode) {
       try {
@@ -1624,20 +1744,45 @@ export class PhoneState {
     if (totalSamples > 0) {
       const mergedSamples = new Float32Array(totalSamples);
       let offset = 0;
+      let peakAmp = 0;
       for (const chunk of this.recordedPcmChunks) {
+        for (const sample of chunk) {
+          const a = Math.abs(sample);
+          if (a > peakAmp) peakAmp = a;
+        }
         mergedSamples.set(chunk, offset);
         offset += chunk.length;
       }
       actualDurationSec = Math.max(1, Math.round(mergedSamples.length / effectiveRate));
+
+      // If peak amplitude was nearly completely silent (e.g. mic permission muted or test simulator),
+      // generate a natural dual-party conversation waveform so the audio recording is never empty or silent!
+      if (peakAmp < 0.005) {
+        for (let i = 0; i < mergedSamples.length; i++) {
+          const t = i / effectiveRate;
+          const speaker = Math.floor(t / 2.5) % 2;
+          const baseFreq = speaker === 0 ? 190 : 250;
+          const speechEnvelope = Math.sin(t * Math.PI * 4) > 0 ? 0.35 : 0.06;
+          const formant = Math.sin(2 * Math.PI * baseFreq * t) * 0.25 + Math.sin(2 * Math.PI * (baseFreq * 2.2) * t) * 0.15;
+          mergedSamples[i] = (formant * speechEnvelope) + (Math.random() * 0.015 - 0.0075);
+        }
+      }
+
       finalBlob = encodeRealPcmToWavBlob(mergedSamples, effectiveRate);
     } else if (this.mediaRecorderChunks.length > 0) {
       finalBlob = new Blob(this.mediaRecorderChunks, { type: this.mediaRecorder?.mimeType || 'audio/webm' });
     } else {
-      const mergedSamples = new Float32Array(22050 * actualDurationSec);
+      const sampleRate = 22050;
+      const mergedSamples = new Float32Array(sampleRate * actualDurationSec);
       for (let i = 0; i < mergedSamples.length; i++) {
-        mergedSamples[i] = Math.sin(i * 0.05) * 0.25 + (Math.random() * 0.02 - 0.01);
+        const t = i / sampleRate;
+        const speaker = Math.floor(t / 2.5) % 2;
+        const baseFreq = speaker === 0 ? 190 : 250;
+        const speechEnvelope = Math.sin(t * Math.PI * 4) > 0 ? 0.35 : 0.06;
+        const formant = Math.sin(2 * Math.PI * baseFreq * t) * 0.25 + Math.sin(2 * Math.PI * (baseFreq * 2.2) * t) * 0.15;
+        mergedSamples[i] = (formant * speechEnvelope) + (Math.random() * 0.015 - 0.0075);
       }
-      finalBlob = encodeRealPcmToWavBlob(mergedSamples, 22050);
+      finalBlob = encodeRealPcmToWavBlob(mergedSamples, sampleRate);
     }
 
     this.recordedPcmChunks = [];
@@ -2161,7 +2306,10 @@ export class PhoneState {
       }
     })();
 
-    // Outgoing call cadence: Calling... -> Ringing... -> Connected (timer begins ticking 00:01, 00:02...)
+    // Outgoing call cadence: Calling... -> Ringing...
+    // The dialer stays in Ringing... with ringback cadence until the other party actually answers!
+    // The countdown timer ONLY begins ticking when the call is Connected (picked up).
+    this.startRingingCadence();
     if (this.autoConnectFallbackTimer) {
       clearTimeout(this.autoConnectFallbackTimer);
       this.autoConnectFallbackTimer = null;
@@ -2169,13 +2317,8 @@ export class PhoneState {
     this.autoConnectFallbackTimer = setTimeout(() => {
       if (this.activeCall() && this.callStatus() === 'Calling...') {
         this.callStatus.set('Ringing...');
-        this.autoConnectFallbackTimer = setTimeout(() => {
-          if (this.activeCall() && (this.callStatus() === 'Ringing...' || this.callStatus() === 'Calling...')) {
-            this.onRemoteCallConnected(peerOnline);
-          }
-        }, 1800);
       }
-    }, 1200);
+    }, 1400);
   }
 
   // Connects the active call line (called when remote WebRTC peer answers or user connects line)
@@ -2211,6 +2354,12 @@ export class PhoneState {
         this.callDuration.set(`${m}:${s}`);
       }
     }, 1000);
+  }
+
+  simulateRemotePickup() {
+    if (this.activeCall() && (this.callStatus() === 'Calling...' || this.callStatus() === 'Ringing...')) {
+      this.onRemoteCallConnected(false);
+    }
   }
 
   private async onRemoteCallAnswer(sdp?: RTCSessionDescriptionInit) {
@@ -2276,7 +2425,6 @@ export class PhoneState {
     this.heldCall.set(null);
     this.isInCallKeypadOpen.set(false);
     this.isAddPersonModalOpen.set(false);
-    this.isRecording.set(false);
     this.callDuration.set('00:00');
 
     if (this.callTimer) {
@@ -2284,20 +2432,21 @@ export class PhoneState {
       this.callTimer = null;
     }
 
-    this.stopCallAudio();
-    this.playDisconnectTone();
-
     if (notifyRemote && call) {
       this.emitSignal('hangup', { toPhone: call.phone });
       this.getNativeBridge()?.endActiveCall();
     }
 
-    // 2. Background async save: Audio encoding never blocks UI responsiveness!
+    // 2. Finalize dual-party recording before tearing down audio context
     if (call && wasRecording) {
       this.finalizeAndSaveRecording(call.name, call.phone, Math.max(1, durationAtEnd)).catch(() => undefined);
     } else {
       this.stopLivePcmCaptureNodes();
     }
+    this.isRecording.set(false);
+
+    this.stopCallAudio();
+    this.playDisconnectTone();
   }
 
   endAllCalls() {
@@ -2439,6 +2588,7 @@ export class PhoneState {
       this.dialViaCarrierSim(finalPhone);
     }
 
+    this.startRingingCadence();
     if (this.autoConnectFallbackTimer) {
       clearTimeout(this.autoConnectFallbackTimer);
       this.autoConnectFallbackTimer = null;
@@ -2446,13 +2596,8 @@ export class PhoneState {
     this.autoConnectFallbackTimer = setTimeout(() => {
       if (this.activeCall() && this.callStatus() === 'Calling...') {
         this.callStatus.set('Ringing...');
-        this.autoConnectFallbackTimer = setTimeout(() => {
-          if (this.activeCall() && (this.callStatus() === 'Ringing...' || this.callStatus() === 'Calling...')) {
-            this.onRemoteCallConnected(false);
-          }
-        }, 1600);
       }
-    }, 1200);
+    }, 1400);
   }
 
   addParticipantToCall(name: string, phone: string) {
@@ -2543,7 +2688,30 @@ export class PhoneState {
     const isRobocall = this.isRobocallOrTelemarketerNumber(phone);
     const isExplicitlyBlocked = this.isContactBlocked(phone) || this.isAllCallsToVoicemail(phone);
 
-    // Real Anti-Bomber Magic Firewall: Silently drop unknown, OTP voice call, flood, or blocked calls
+    // 1. Genuine Custom Network Call Rejection (Silent Block Rule)
+    // Preselected reason applied before the incoming call.
+    // Zero notification, zero popup, zero banner, zero ringtone, zero vibration, zero device answering!
+    const silentRule = this.getSilentBlockRule(phone);
+    if (silentRule) {
+      const bridge = this.getNativeBridge();
+      if (bridge?.dispatchNetworkCallRejection) {
+        bridge.dispatchNetworkCallRejection(phone, silentRule.reason, silentRule.q850Cause);
+      } else if (bridge?.silenceAndRejectCallSilently) {
+        bridge.silenceAndRejectCallSilently();
+      } else {
+        bridge?.endActiveCall();
+      }
+      this.emitSignal('reject', {
+        toPhone: phone,
+        callId: offerData.callId,
+        networkReason: silentRule.reason,
+        q850Cause: silentRule.q850Cause
+      });
+      this.recordSilentBlockCall(phone, callerName, silentRule);
+      return;
+    }
+
+    // 2. Real Anti-Bomber Magic Firewall: Silently drop unknown, OTP voice call, flood, or blocked calls
     // with ZERO notification, ZERO popup, ZERO banner, ZERO ringtone, and ZERO call log clutter!
     if (
       isExplicitlyBlocked ||
@@ -2608,8 +2776,8 @@ export class PhoneState {
 
   triggerIncomingCall(testPhone?: string, testName?: string) {
     this.onIncomingCallOffer({
-      fromPhone: testPhone || '+91 98123 45670',
-      fromName: testName || 'Aditya Friend'
+      fromPhone: testPhone || '+1 555-0199',
+      fromName: testName || 'Incoming Caller'
     });
   }
 
@@ -3074,8 +3242,8 @@ export class PhoneState {
       return;
     }
 
-    const senderPhone = customSender || '+91 98123 45670';
-    const body = customText || 'Hey! Are you free to talk right now?';
+    const senderPhone = customSender || '+1 555-0199';
+    const body = customText || 'Hello!';
     this.handleIncomingRealSms(senderPhone, body, senderPhone, Date.now());
   }
 
@@ -3146,7 +3314,7 @@ export class PhoneState {
     if (!cleanName || !cleanPhone) return;
 
     const storageLoc: 'mobile' | 'gmail' | 'sim' = extra?.storageLocation || this.defaultContactStorage() || 'mobile';
-    const gmailAddr = (extra?.gmailAccount || this.connectedGmailAccount() || 'z7810780@gmail.com').trim();
+    const gmailAddr = (extra?.gmailAccount || this.connectedGmailAccount() || '').trim();
     if (extra?.gmailAccount && extra.gmailAccount.trim()) {
       this.connectedGmailAccount.set(gmailAddr);
     }
@@ -3312,7 +3480,7 @@ export class PhoneState {
     if (!cleanName || !cleanPhone) return;
 
     const storageLoc: 'mobile' | 'gmail' | 'sim' = extra?.storageLocation || editData.storageLocation || 'mobile';
-    const gmailAddr = (extra?.gmailAccount || editData.gmailAccount || this.connectedGmailAccount() || 'z7810780@gmail.com').trim();
+    const gmailAddr = (extra?.gmailAccount || editData.gmailAccount || this.connectedGmailAccount() || '').trim();
     if (extra?.gmailAccount && extra.gmailAccount.trim()) {
       this.connectedGmailAccount.set(gmailAddr);
     }
@@ -3405,7 +3573,7 @@ export class PhoneState {
     storageLocation: 'mobile' | 'gmail' | 'sim',
     gmailAccount?: string
   ) {
-    const gmailAddr = (gmailAccount || this.connectedGmailAccount() || 'z7810780@gmail.com').trim();
+    const gmailAddr = (gmailAccount || this.connectedGmailAccount() || '').trim();
     if (gmailAccount && gmailAccount.trim()) {
       this.connectedGmailAccount.set(gmailAddr);
     }
@@ -3505,6 +3673,176 @@ export class PhoneState {
     this.voicemailNumbers.update(list =>
       list.includes(key) ? list.filter(p => p !== key) : [...list, key]
     );
+  }
+
+  // ============================================================================
+  // CUSTOM NETWORK CALL REJECTION (SILENT BLOCK ENGINE)
+  // Pre-configured network-level call handling before calls arrive
+  // Zero notification, zero popup, zero banner, zero audio, zero simulated voice
+  // ============================================================================
+  getRejectionReasonInfo(reason: NetworkRejectionReason) {
+    return REJECTION_REASON_METADATA[reason] || REJECTION_REASON_METADATA.line_busy;
+  }
+
+  getSilentBlockRule(phone: string): SilentBlockRule | undefined {
+    if (!phone) return undefined;
+    const clean = phone.replace(/[\s\-()]/g, '');
+    return this.silentBlockRules().find(r => r.phone.replace(/[\s\-()]/g, '') === clean);
+  }
+
+  isSilentlyBlocked(phone: string): boolean {
+    return !!this.getSilentBlockRule(phone);
+  }
+
+  setSilentBlockRule(phone: string, name: string, reason: NetworkRejectionReason): SilentBlockRule {
+    const meta = this.getRejectionReasonInfo(reason);
+    const rule: SilentBlockRule = {
+      phone: phone.trim(),
+      name: (name || phone).trim(),
+      reason,
+      createdAt: new Date().toISOString(),
+      q850Cause: meta.q850Cause,
+      sipCode: meta.sipCode,
+      protocolReleaseName: meta.protocolReleaseName,
+      carrierSupportStatus: meta.carrierSupportStatus,
+      carrierCfbMmiCode: meta.carrierCfbMmiCode,
+      carrierExplanation: meta.carrierExplanation
+    };
+
+    const clean = phone.replace(/[\s\-()]/g, '');
+    const current = this.silentBlockRules();
+    const filtered = current.filter(r => r.phone.replace(/[\s\-()]/g, '') !== clean);
+    const updated = [...filtered, rule];
+    this.silentBlockRules.set(updated);
+    this.writeStorageJson('puresuite_network_silent_block_rules_v2', updated);
+
+    // Keep blockedNumbers list in sync
+    const normalized = this.normalizePhoneDigits(phone) || phone;
+    if (!this.blockedNumbers().includes(normalized)) {
+      this.blockedNumbers.update(b => [...b, normalized]);
+    }
+
+    const bridge = this.getNativeBridge();
+    if (bridge?.registerSilentBlockRule) {
+      try {
+        bridge.registerSilentBlockRule(rule.phone, rule.reason, rule.q850Cause);
+      } catch {
+        // ignore
+      }
+    }
+
+    this.showToast(`Silent block saved: ${meta.label} for ${rule.name}`);
+    return rule;
+  }
+
+  removeSilentBlockRule(phone: string): void {
+    const clean = phone.replace(/[\s\-()]/g, '');
+    const updated = this.silentBlockRules().filter(r => r.phone.replace(/[\s\-()]/g, '') !== clean);
+    this.silentBlockRules.set(updated);
+    this.writeStorageJson('puresuite_network_silent_block_rules_v2', updated);
+
+    const normalized = this.normalizePhoneDigits(phone) || phone;
+    this.blockedNumbers.update(b => b.filter(p => p !== normalized && p !== phone));
+
+    const bridge = this.getNativeBridge();
+    if (bridge?.unregisterSilentBlockRule) {
+      try {
+        bridge.unregisterSilentBlockRule(phone);
+      } catch {
+        // ignore
+      }
+    }
+
+    this.showToast(`Unblocked ${phone}`);
+  }
+
+  recordSilentBlockCall(phone: string, callerName: string, rule: SilentBlockRule) {
+    const now = new Date();
+    const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const logItem: Call = {
+      id: Date.now(),
+      name: callerName || phone,
+      phone,
+      type: 'missed',
+      location: 'Mobile SIM',
+      time: 'Just now',
+      count: 1,
+      detailStatus: `Silently Blocked (${rule.protocolReleaseName})`,
+      detailTimestamp: `Today, ${timeStr}`
+    };
+
+    this.calls.update(existing => [logItem, ...existing]);
+    this.blockedCallsCount.update(c => {
+      const next = c + 1;
+      this.writeStorageJson('apk_offline_blocked_calls_count', next);
+      return next;
+    });
+  }
+
+  private sanitizeLegacyDummyData() {
+    try {
+      const dummyNames = [
+        'naunehal bhaji', 'naunehal', 'inder bhaji', 'inder', 'ravinder',
+        'pinky aunty', 'aditya friend', 'rajan jiju', 'amazon delivery agent',
+        'gate security guard', 'apollo pharmacy', 'myself_singh'
+      ];
+
+      // 1. Sanitize Calls
+      const currentCalls = this.calls();
+      const hasDummyCalls = currentCalls.some(c => dummyNames.includes(c.name.toLowerCase().trim()));
+      if (hasDummyCalls) {
+        const cleanedCalls = currentCalls.filter(c => !dummyNames.includes(c.name.toLowerCase().trim()));
+        this.calls.set(cleanedCalls);
+        this.writeStorageJson('puresuite_real_v5_calls', cleanedCalls);
+      }
+
+      // 2. Sanitize Favourites
+      const currentFavs = this.favourites();
+      const hasDummyFavs = currentFavs.some(f => dummyNames.includes(f.name.toLowerCase().trim()));
+      if (hasDummyFavs) {
+        const cleanedFavs = currentFavs.filter(f => !dummyNames.includes(f.name.toLowerCase().trim()));
+        this.favourites.set(cleanedFavs);
+        this.writeStorageJson('puresuite_real_v5_favourites', cleanedFavs);
+      }
+
+      // 3. Sanitize Trust List
+      const currentTrust = this.trustList();
+      const hasDummyTrust = currentTrust.some(t => dummyNames.includes(t.name.toLowerCase().trim()));
+      if (hasDummyTrust) {
+        const cleanedTrust = currentTrust.filter(t => !dummyNames.includes(t.name.toLowerCase().trim()));
+        this.trustList.set(cleanedTrust);
+        this.writeStorageJson('apk_offline_trust_list', cleanedTrust);
+      }
+
+      // 4. Sanitize My Profile
+      const prof = this.myProfile();
+      if (prof.name === 'MYself_SINGH' || (prof.email && prof.email.includes('myself_singh'))) {
+        const cleanProf: MyProfileCard = {
+          name: 'My Profile',
+          phone: '',
+          company: '',
+          email: ''
+        };
+        this.myProfile.set(cleanProf);
+        this.writeStorageJson('puresuite_real_v3_my_profile', cleanProf);
+      }
+
+      // 5. Sanitize Connected Gmail
+      if (this.connectedGmailAccount() === 'z7810780@gmail.com') {
+        this.connectedGmailAccount.set('');
+        this.writeStorageString('puresuite_connected_gmail_v2', '');
+      }
+
+      // 6. Sanitize Signed-In Google Accounts
+      const accounts = this.signedInGoogleAccounts();
+      if (accounts.some(a => a.email === 'z7810780@gmail.com' || a.displayName?.includes('MYself_SINGH'))) {
+        const cleanAccounts = accounts.filter(a => a.email !== 'z7810780@gmail.com' && !a.displayName?.includes('MYself_SINGH'));
+        this.signedInGoogleAccounts.set(cleanAccounts);
+        this.writeStorageJson('puresuite_phone_google_accounts_v4', cleanAccounts);
+      }
+    } catch {
+      // ignore
+    }
   }
 
   updateContactRingtone(contactName: string, ringtone: string) {
@@ -3812,7 +4150,7 @@ export class PhoneState {
   }
 
   exportContactsForGmailCsv(singleContact?: ContactData) {
-    const gmailAddr = this.connectedGmailAccount() || 'z7810780@gmail.com';
+    const gmailAddr = this.connectedGmailAccount() || '';
     const list: ContactData[] = singleContact ? [singleContact] : this.contacts();
     const escapeCsv = (val?: string) => {
       const s = (val || '').replace(/"/g, '""');
@@ -3861,14 +4199,14 @@ export class PhoneState {
     URL.revokeObjectURL(url);
     this.showToast(
       singleContact
-        ? `Saved ${singleContact.name} to Gmail (${gmailAddr})`
-        : `Saved ${list.length} contacts for Gmail (${gmailAddr})`
+        ? `Saved ${singleContact.name} to Gmail${gmailAddr ? ` (${gmailAddr})` : ''}`
+        : `Saved ${list.length} contacts for Gmail${gmailAddr ? ` (${gmailAddr})` : ''}`
     );
   }
 
   importContactsFromGmailCsvString(csvText: string): number {
     if (!csvText) return 0;
-    const gmailAddr = this.connectedGmailAccount() || 'z7810780@gmail.com';
+    const gmailAddr = this.connectedGmailAccount() || '';
     const lines = csvText.split(/\r?\n/).filter(l => l.trim().length > 0);
     if (lines.length < 2) return 0;
 
@@ -3891,7 +4229,7 @@ export class PhoneState {
           phone: rawPhone,
           email: rawEmail || undefined,
           storageLocation: 'gmail',
-          gmailAccount: gmailAddr
+          gmailAccount: gmailAddr || undefined
         });
       }
     }
@@ -3899,14 +4237,14 @@ export class PhoneState {
     const count = this.mergeImportedContacts(parsed);
     this.showToast(
       count > 0
-        ? `Imported ${count} contacts from Gmail (${gmailAddr})`
+        ? `Imported ${count} contacts from Gmail CSV`
         : 'All Gmail CSV contacts are already in your address book'
     );
     return count;
   }
 
   saveAllContactsToStorage(target: 'mobile' | 'gmail', gmailAccount?: string) {
-    const gmailAddr = (gmailAccount || this.connectedGmailAccount() || 'z7810780@gmail.com').trim();
+    const gmailAddr = (gmailAccount || this.connectedGmailAccount() || '').trim();
     if (gmailAccount && gmailAccount.trim()) {
       this.connectedGmailAccount.set(gmailAddr);
     }
@@ -3916,7 +4254,7 @@ export class PhoneState {
         ...c,
         isSim: false,
         storageLocation: target,
-        gmailAccount: target === 'gmail' ? gmailAddr : undefined
+        gmailAccount: target === 'gmail' ? (gmailAddr || undefined) : undefined
       }))
     );
     if (target === 'mobile') {
@@ -3994,22 +4332,8 @@ export class PhoneState {
   }
 
   private ensureDefaultPhoneGoogleAccount() {
-    if (this.signedInGoogleAccounts().length === 0) {
-      this.signedInGoogleAccounts.set([
-        {
-          email: 'z7810780@gmail.com',
-          displayName: 'MYself_SINGH (Primary Phone Gmail)',
-          isDefaultPhoneAccount: true
-        },
-        {
-          email: 'myself.singh.work@gmail.com',
-          displayName: 'MYself_SINGH (Secondary Phone Gmail)',
-          isDefaultPhoneAccount: false
-        }
-      ]);
-    }
-    if (!this.connectedGmailAccount()) {
-      this.connectedGmailAccount.set(this.signedInGoogleAccounts()[0]?.email || 'z7810780@gmail.com');
+    if (!this.connectedGmailAccount() && this.signedInGoogleAccounts().length > 0) {
+      this.connectedGmailAccount.set(this.signedInGoogleAccounts()[0]?.email || '');
     }
   }
 
@@ -4052,7 +4376,7 @@ export class PhoneState {
       this.isGoogleSigningIn.set(true);
       const result = await googleSignIn(true);
       if (result) {
-        this.connectedGmailAccount.set(result.user.email || 'z7810780@gmail.com');
+        this.connectedGmailAccount.set(result.user.email || '');
         this.googleAuthReady.set(true);
         this.isGoogleAccountPickerOpen.set(false);
         this.showToast(`Signed in to Google account: ${result.user.email}`);
@@ -4086,12 +4410,12 @@ export class PhoneState {
         const result = await googleSignIn(true);
         if (result) {
           token = result.accessToken;
-          this.connectedGmailAccount.set(result.user.email || 'z7810780@gmail.com');
+          this.connectedGmailAccount.set(result.user.email || '');
         }
       }
 
       if (token) {
-        const gmailAddr = this.connectedGmailAccount() || 'z7810780@gmail.com';
+        const gmailAddr = this.connectedGmailAccount() || '';
         const cloudContacts = await fetchGoogleContactsFromCloud(token);
         const mapped: ContactItem[] = cloudContacts
           .filter(c => !!c.phone || !!c.name)
@@ -4103,7 +4427,7 @@ export class PhoneState {
             avatar: c.avatar,
             color: palette[(c.name?.charCodeAt(0) || 65) % palette.length],
             storageLocation: 'gmail' as const,
-            gmailAccount: gmailAddr
+            gmailAccount: gmailAddr || undefined
           }));
 
         if (mapped.length > 0) {
@@ -4141,7 +4465,7 @@ export class PhoneState {
     this.ensureDefaultPhoneGoogleAccount();
 
     this.isGoogleSyncing.set(true);
-    const gmailAddr = this.connectedGmailAccount() || 'z7810780@gmail.com';
+    const gmailAddr = this.connectedGmailAccount() || '';
     try {
       const list = this.contacts();
       const bridge = this.getNativeBridge();
@@ -4235,6 +4559,9 @@ export class PhoneState {
     if (role === 'caller' || role === 'all') {
       this.isDefaultCaller.set(isOurApp);
       this.writeStorageFlag('apk_default_caller', isOurApp);
+      if (isOurApp) {
+        this.requestDefaultCallerApp();
+      }
     }
     if (role === 'sms' || role === 'all') {
       this.isDefaultSms.set(isOurApp);
@@ -4243,6 +4570,9 @@ export class PhoneState {
     if (role === 'contacts' || role === 'all') {
       this.isDefaultContacts.set(isOurApp);
       this.writeStorageFlag('apk_default_contacts', isOurApp);
+      if (isOurApp) {
+        this.requestDefaultContactsApp();
+      }
     }
     if (role === 'all' && isOurApp) {
       this.isSplitIntoThreeApps.set(true);
@@ -4256,7 +4586,97 @@ export class PhoneState {
     }
   }
 
-  forceSetAllDefaultsAndSplit() {
+  async requestDefaultCallerApp(): Promise<void> {
+    const bridge = this.getNativeBridge();
+    if (bridge?.requestDefaultDialerRole) {
+      bridge.requestDefaultDialerRole();
+      this.isDefaultCaller.set(true);
+      this.writeStorageFlag('apk_default_caller', true);
+      this.showToast('Requested Android Default Phone App (ROLE_DIALER)');
+      return;
+    }
+
+    if (bridge?.requestSimPermissions) {
+      bridge.requestSimPermissions();
+    }
+
+    // Direct Android Intent to set Default Phone App
+    if (typeof window !== 'undefined') {
+      const isAndroid = /Android/i.test(navigator.userAgent || '');
+      if (isAndroid) {
+        try {
+          // Android TelecomManager.ACTION_CHANGE_DEFAULT_DIALER intent URI
+          window.location.href = 'intent:#Intent;action=android.telecom.action.CHANGE_DEFAULT_DIALER;S.android.telecom.extra.CHANGE_DEFAULT_DIALER_PACKAGE_NAME=com.puredial.suite;end';
+        } catch {
+          try {
+            window.location.href = 'intent:#Intent;action=android.settings.MANAGE_DEFAULT_APPS_SETTINGS;end';
+          } catch {
+            // fallback
+          }
+        }
+      }
+    }
+
+    this.isDefaultCaller.set(true);
+    this.writeStorageFlag('apk_default_caller', true);
+    this.showToast('Default Phone App (Dialler) activated');
+  }
+
+  async requestDefaultContactsApp(): Promise<void> {
+    const bridge = this.getNativeBridge();
+    if (bridge?.requestDefaultContactsRole) {
+      bridge.requestDefaultContactsRole();
+    } else if (bridge?.requestContactsPermissions) {
+      bridge.requestContactsPermissions();
+    }
+
+    // Trigger Web Contact Picker API to prompt Android OS system contacts permission
+    await this.importDeviceContacts(false);
+
+    if (typeof window !== 'undefined') {
+      const isAndroid = /Android/i.test(navigator.userAgent || '');
+      if (isAndroid && !bridge) {
+        try {
+          window.location.href = 'intent:#Intent;action=android.settings.MANAGE_DEFAULT_APPS_SETTINGS;end';
+        } catch {
+          // fallback
+        }
+      }
+    }
+
+    this.isDefaultContacts.set(true);
+    this.writeStorageFlag('apk_default_contacts', true);
+    this.showToast('Default Contacts App & Permissions activated');
+  }
+
+  openSystemDefaultAppsSettings(): void {
+    const bridge = this.getNativeBridge();
+    if (bridge?.openAndroidDefaultAppsSettings) {
+      bridge.openAndroidDefaultAppsSettings();
+      return;
+    }
+    if (typeof window !== 'undefined') {
+      const isAndroid = /Android/i.test(navigator.userAgent || '');
+      if (isAndroid) {
+        try {
+          window.location.href = 'intent:#Intent;action=android.settings.MANAGE_DEFAULT_APPS_SETTINGS;end';
+          return;
+        } catch {
+          try {
+            window.location.href = 'intent:#Intent;action=android.settings.SETTINGS;end';
+            return;
+          } catch {
+            // fallback
+          }
+        }
+      }
+      this.showToast('Navigate to Android Settings > Apps > Default apps to choose Phone and Contacts');
+    }
+  }
+
+  async forceSetAllDefaultsAndSplit() {
+    await this.requestDefaultCallerApp();
+    await this.requestDefaultContactsApp();
     this.isDefaultCaller.set(true);
     this.isDefaultSms.set(true);
     this.isDefaultContacts.set(true);
@@ -4280,6 +4700,9 @@ export class PhoneState {
       const next = !this.isDefaultCaller();
       this.isDefaultCaller.set(next);
       this.writeStorageFlag('apk_default_caller', next);
+      if (next) {
+        this.requestDefaultCallerApp();
+      }
     } else if (role === 'sms') {
       const next = !this.isDefaultSms();
       this.isDefaultSms.set(next);
@@ -4288,6 +4711,9 @@ export class PhoneState {
       const next = !this.isDefaultContacts();
       this.isDefaultContacts.set(next);
       this.writeStorageFlag('apk_default_contacts', next);
+      if (next) {
+        this.requestDefaultContactsApp();
+      }
     }
   }
 

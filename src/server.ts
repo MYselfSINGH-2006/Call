@@ -128,8 +128,8 @@ function getActiveDirectory() {
 // 1. Server-Sent Events (SSE) stream for real-time incoming calls, WebRTC SDP/ICE, and SMS
 app.get('/api/events', (req: Request, res: Response) => {
   const clientId = String(req.query['clientId'] || `peer_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`);
-  const phone = String(req.query['phone'] || '+91 98765 43210');
-  const name = String(req.query['name'] || 'PureSuite User');
+  const phone = String(req.query['phone'] || '');
+  const name = String(req.query['name'] || 'User');
   const antiBomber = req.query['antiBomber'] === 'true';
 
   res.setHeader('Content-Type', 'text/event-stream');
@@ -285,7 +285,7 @@ app.post('/api/sms/send', (req: Request, res: Response) => {
 
   const smsEvent: StoredSmsEvent = {
     id: Date.now() + Math.floor(Math.random() * 1000),
-    fromPhone: String(fromPhone || '+91 98765 43210'),
+    fromPhone: String(fromPhone || 'Unknown'),
     fromName: String(fromName || fromPhone || 'Sender'),
     toPhone: String(toPhone),
     text: String(text),
