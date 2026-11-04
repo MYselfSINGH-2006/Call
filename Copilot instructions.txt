@@ -1,0 +1,168 @@
+====================================================
+  FIX: app-debug-fixed-final.apk - Real SIM Calling
+  Instructions for GitHub Codespace / Copilot
+====================================================
+
+THE PROBLEM:
+The app simulates calls instead of making real ones because
+the native Android bridge (window.AndroidNativeBridge) is
+never injected into the WebView. The JavaScript code is
+already correct — only the Java/Android side is missing.
+
+====================================================
+STEP 1 — CREATE A NEW FILE
+====================================================
+
+File path (create this new file):
+android/app/src/main/java/com/puredial/suite/AndroidNativeBridge.java
+
+Paste this exact content:
+
+-------------------------------------------------------------------
+package com.puredial.suite;
+
+import android.content.Context;
+import android.content.Intent;
+import android.net.Uri;
+import android.webkit.JavascriptInterface;
+
+public class AndroidNativeBridge {
+
+    private final Context context;
+
+    public AndroidNativeBridge(Context context) {
+        this.context = context;
+    }
+
+    @JavascriptInterface
+    public void placeRealSimCall(String phoneNumber) {
+        String cleaned = phoneNumber.replaceAll("[^\\d+*#]", "");
+        Intent intent = new Intent(Intent.ACTION_CALL);
+        intent.setData(Uri.parse("tel:" + cleaned));
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        context.startActivity(intent);
+    }
+
+    @JavascriptInterface
+    public void requestSimPermissions() {
+        // Permissions are requested at runtime in MainActivity
+    }
+
+    @JavascriptInterface
+    public String getLocalSimStatusJson() {
+        return "{\"carrierName\":\"SIM\"}";
+    }
+}
+-------------------------------------------------------------------
+
+
+====================================================
+STEP 2 — EDIT AN EXISTING FILE
+====================================================
+
+File path (edit this existing file):
+android/app/src/main/java/com/puredial/suite/MainActivity.java
+
+Replace the entire content of MainActivity.java with this:
+
+-------------------------------------------------------------------
+package com.puredial.suite;
+
+import android.Manifest;
+import android.content.pm.PackageManager;
+import android.os.Bundle;
+import androidx.core.app.ActivityCompat;
+import androidx.core.content.ContextCompat;
+import com.getcapacitor.BridgeActivity;
+
+public class MainActivity extends BridgeActivity {
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+
+        // Inject the native bridge so window.AndroidNativeBridge
+        // is available in the JavaScript/WebView layer
+        getBridge().getWebView().addJavascriptInterface(
+            new AndroidNativeBridge(this),
+            "AndroidNativeBridge"
+        );
+    }
+
+    @Override
+    protected void onStart() {
+        super.onStart();
+
+        // Request CALL_PHONE permission at runtime (required Android 6+)
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CALL_PHONE)
+                != PackageManager.PERMISSION_GRANTED) {
+            ActivityCompat.requestPermissions(
+                this,
+                new String[]{ Manifest.permission.CALL_PHONE },
+                1001
+            );
+        }
+    }
+}
+-------------------------------------------------------------------
+
+
+====================================================
+STEP 3 — VERIFY AndroidManifest.xml (no change needed)
+====================================================
+
+File path:
+android/app/src/main/AndroidManifest.xml
+
+Just confirm these two lines already exist inside <manifest> tag.
+They are already present in your APK — just double check:
+
+    <uses-permission android:name="android.permission.CALL_PHONE" />
+    <uses-permission android:name="android.permission.READ_PHONE_STATE" />
+
+If they are missing, add them. If they are already there, skip this step.
+
+
+====================================================
+STEP 4 — BUILD THE APK
+====================================================
+
+Run this command in the Codespace terminal:
+
+    cd android
+    ./gradlew assembleDebug
+
+The output APK will be at:
+    android/app/build/outputs/apk/debug/app-debug.apk
+
+
+====================================================
+STEP 5 — INSTALL ON YOUR PHONE
+====================================================
+
+Option A — Download from Codespace:
+  1. Right-click the APK file in the file explorer
+  2. Click "Download"
+  3. Transfer to phone and install
+  (Make sure "Install from unknown sources" is enabled in phone settings)
+
+Option B — ADB (if phone is connected):
+    adb install android/app/build/outputs/apk/debug/app-debug.apk
+
+
+====================================================
+WHAT THIS FIX DOES (summary for Copilot)
+====================================================
+
+- The app JS code calls: window.AndroidNativeBridge.placeRealSimCall(number)
+- Before this fix: AndroidNativeBridge did not exist → calls were simulated
+- After this fix: AndroidNativeBridge is injected into WebView in onCreate()
+  and placeRealSimCall() fires a real Android ACTION_CALL intent
+- The CALL_PHONE permission is requested at runtime so Android allows it
+
+No changes needed in Google AI Studio or the web/JS code.
+Only these 2 Java files need to be changed in the Codespace.
+
+====================================================
+END OF INSTRUCTIONS
+====================================================
